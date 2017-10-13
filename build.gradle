@@ -1,0 +1,140 @@
+/*
+This is the GRADLE build file for LIRE.
+ */
+apply plugin: 'java'
+apply plugin: 'project-report'
+
+sourceCompatibility = 1.8
+version = project.property('versionString') + '_build' + project.property('buildNumber')
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+    maven {
+        url 'http://maven.restlet.org'
+    }
+}
+
+dependencies {
+    // ---< Lucene >---
+    compile group: 'org.apache.lucene', name: 'lucene-core', version: '6.4.0'
+    compile group: 'org.apache.lucene', name: 'lucene-analyzers-common', version: '6.4.0'
+    compile group: 'org.apache.lucene', name: 'lucene-queryparser', version: '6.4.0'
+    compile group: 'org.apache.lucene', name: 'lucene-queries', version: '6.4.0'
+
+    // ---< Solr >---
+    // https://mvnrepository.com/artifact/org.apache.solr/solr-core
+    compile group: 'org.apache.solr', name: 'solr-core', version: '6.4.0'
+    // https://mvnrepository.com/artifact/org.apache.solr/solr-dataimporthandler
+    compile group: 'org.apache.solr', name: 'solr-dataimporthandler', version: '6.4.0'
+    compile group: 'org.apache.solr', name: 'solr-solrj', version: '6.4.0'
+    // https://mvnrepository.com/artifact/org.apache.solr/solr-solrj
+
+    // ---< Commons >---
+    compile group: 'commons-io', name: 'commons-io', version: '2.5'
+    compile group: 'org.apache.commons', name: 'commons-math3', version: '3.6.1'
+    // https://mvnrepository.com/artifact/commons-codec/commons-codec
+    compile group: 'commons-codec', name: 'commons-codec', version: '1.10'
+    // https://mvnrepository.com/artifact/com.sangupta/jopensurf
+    compile group: 'com.sangupta', name: 'jopensurf', version: '1.0.0'
+    // https://mvnrepository.com/artifact/org.bytedeco.javacpp-presets/opencv
+    // compile group: 'org.bytedeco.javacpp-presets', name: 'opencv', version: '2.4.11-0.11'
+
+    // ---< Helper files >---
+    // https://mvnrepository.com/artifact/com.twelvemonkeys.imageio/imageio-jpeg
+    compile group: 'com.twelvemonkeys.imageio', name: 'imageio-jpeg', version: '3.3.1'
+
+    // ---< Current version of LIRE >---
+    compile fileTree(dir: 'lib', include: '*.jar')
+    runtime fileTree(dir: 'lib', include: '*.jar')
+
+    // https://mvnrepository.com/artifact/junit/junit
+    testCompile group: 'junit', name: 'junit', version: '4.12'
+
+}
+
+
+jar {
+    Properties props = new Properties()
+    File propsFile = new File("$project.rootDir/gradle.properties")
+    props.load(propsFile.newDataInputStream())
+    Integer nextbuildnum = (((props.getProperty('buildNumber')) as BigDecimal) + 1)
+    props.setProperty('buildNumber', nextbuildnum.toString())
+
+    def date = new Date()
+    def formattedDate = date.format('yyyy-MM-dd-HHmm')
+    props.setProperty('buildDate', formattedDate.toString())
+
+    props.store(propsFile.newWriter(), null)
+
+    archiveName = baseName+'-'+props.getProperty('versionString')+'.'+extension
+
+    manifest {
+        attributes 'Implementation-Title': 'lire_solr_tools',
+                'Implementation-Version': props.getProperty('versionString') + ' build' + nextbuildnum.toString() + ' date' + formattedDate.toString()
+    }
+}
+
+
+/**
+ * Deploys the results from the jar task to Solr.
+ */
+task distForSolr(type: Copy, dependsOn: jar) {
+    delete './dist'
+    String path = './dist'
+//    String path = 'D:/Java/Libs/solr-6.4.0/server/solr-webapp/webapp/WEB-INF/lib/'
+    String lsJar = 'liresolr.jar'
+    String liJar = 'lire.jar'
+    delete path + lsJar
+    delete path + liJar
+    from('build/libs'){
+        include 'LireSolr*.jar'
+        rename {  lsJar }
+    }
+    from('lib'){
+        include 'LIRE-*.jar'
+        rename { liJar }
+    }
+    into path
+}
+
+task prepareForDockerImage(type: Copy, dependsOn: distForSolr) {
+    String path = './liresolr-docker-build'
+    delete path
+    String lsJar = 'liresolr.jar'
+    String liJar = 'lire.jar'
+    from('build/libs'){
+        include 'LireSolr*.jar'
+        rename {  lsJar }
+    }
+    from('lib'){
+        include 'LIRE-*.jar'
+        rename { liJar }
+    }
+    into path
+    from ('src/main/web') into path
+    from ('src/main/docker') into path
+}
+
+task createCommandlineDownloader(type: Jar, dependsOn: build) {
+    archiveName = 'flickrdownloader.jar'
+    destinationDir = project.getRootDir()
+
+    from { Project.DEFAULT_BUILD_DIR_NAME + "/classes/main" }
+    from { zipTree("lib/LIRE-1.0_b04.jar") }
+
+    manifest.attributes(
+            'Main-Class': 'net.semanticmetadata.lire.solr.tools.FlickrSolrIndexingTool',
+            'Class-Path': 'lire.jar'
+    )
+
+}
+
+task runParallelIndexer(type: JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    main = 'net.semanticmetadata.lire.solr.indexing.ParallelSolrIndexer'
+
+    // arguments to pass to the application
+    args('-i /temp/images.lst -f -o /temp/images-out.xml -n 8'.split(' '))
+}
+
